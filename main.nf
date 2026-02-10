@@ -11,6 +11,10 @@ params.modif = 'pseU'
 params.reference = 'data/reference/Homo_sapiens.rRNA.fasta'
 params.seqtagger_sif = null
 
+/*params.bam_dir = 'results/demultiplex_bam/'
+*params.sample_sheet = 'data/RNA_barcodes_sampleSheet.csv'
+*/
+
 process dorado_model {
     storeDir "${workflow.launchDir}/models"
 
@@ -27,6 +31,8 @@ process dorado_model {
 }
 
 process dorado_basecall {
+    storeDir "${workflow.launchDir}/results/demultiplexed_bams"
+
     input:
     path pod5_dir
     path reference_file
@@ -92,30 +98,32 @@ process seqtagger_index {
         ${sif_file} \
         mRNA -k /opt/app/models/b96_RNA004 -r \
         -i /data/pod5/ \
-        -o /data/pod5/demux
-    
-    cp /data/pod5/demux/*.demux.tsv.gz .
+        -o /data/pod5/demux    
     """
 }
 
 process seqtagger_demultiplex {
-    publishDir "${workflow.launchDir}/results/demultiplexed_bams", mode: 'copy'
-    
+    storeDir "${workflow.launchDir}/results/demultiplexed_bams"
+    errorStrategy 'ignore'
+
     input:
     path bam_file
     path index
     path sif_file
-    
+
     output:
-    path "*.bam"
-    
+    path ".bc_*.bam"
+
     script:
     """
-    apptainer run --nv --bind \$(pwd):/work ${sif_file} \
+    apptainer run --nv \
+        --bind \$(pwd):/work \
+        --bind ${workflow.launchDir}/data:/data \
+        ${sif_file} \
         bam_split_by_barcode.py \
-        -i /work/${index} \
+        -i /data/pod5/demux/${index} \
         -f /work/${bam_file} \
-        -o /work/
+        -o /work/; exit 0
     """
 }
 
@@ -136,7 +144,6 @@ process pileup {
         ${demuxed_bam.baseName}.bed \
         --ref ${reference_file} \
         --filter-threshold 0.90 \
-        --threads ${task.cpus}
     """
 }
 
@@ -151,7 +158,7 @@ process Rreport {
     
     script:
     """
-    Rscript ${projectDir}/scripts/generate_report.R \
+    Rscript ${workflow.projectDir}/scripts/generate_report.R \
         --input ${pileup_files} \
         --output report.html
     """
@@ -174,28 +181,27 @@ workflow {
     }
     
     index_ch = seqtagger_index(sif_ch)
-    
-    // Basecall all pod5 files at once
-    bam_ch = dorado_basecall(
-        pod5_dir_ch,
-        reference_ch,
-        model_ch,
-        params.modif
-    )
-    
-    // Sort and index
-    sorted_ch = sort_index_bam(bam_ch)
-    
+
+    // Basecall all pod5 files
+    if (file("${workflow.launchDir}/results/demultiplexed_bams/output.bam").exists()) {
+        bam_ch = Channel.fromPath("${workflow.launchDir}/results/demultiplexed_bams/output.bam")
+    } else {
+        bam_ch = dorado_basecall(pod5_dir_ch, reference_ch, model_ch, params.modif)
+    }
+        
     // Demultiplex using the index
     demux_ch = seqtagger_demultiplex(
-        sorted_ch.bam,
+        bam_ch,
         index_ch,
         sif_ch
     )
     
+        // Sort and index
+    sorted_ch = sort_index_bam(demux_ch.flatten())
+
     // Pileup per demuxed file
     pileup_ch = pileup(
-        demux_ch.flatten(),
+        sorted_ch.bam.flatten(),
         reference_ch
     )
     
