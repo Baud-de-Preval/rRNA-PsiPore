@@ -56,19 +56,19 @@ process dorado_basecall {
 }
 
 process sort_index_bam {
+    publishDir "${workflow.launchDir}/results/sorted_bams", mode: 'copy'
     input:
     path bam_file
     
     output:
-    path "*.sorted.bam", emit: bam
-    path "*.sorted.bam.bai", emit: bai
+    tuple path("*.sorted.bam"), path("*.sorted.bam.bai"), emit: sorted
     
     script:
     """
     samtools sort -o ${bam_file.baseName}.sorted.bam ${bam_file}
     samtools index ${bam_file.baseName}.sorted.bam
     """
-}   
+}
 
 process download_seqtagger_image {
     storeDir "${workflow.launchDir}/data"
@@ -112,7 +112,7 @@ process seqtagger_demultiplex {
     path sif_file
 
     output:
-    path ".bc_*.bam"
+    path "output.bc_*.bam"
 
     script:
     """
@@ -123,27 +123,26 @@ process seqtagger_demultiplex {
         bam_split_by_barcode.py \
         -i /data/pod5/demux/${index} \
         -f /work/${bam_file} \
-        -o /work/; exit 0
+        -o /work/output; exit 0
     """
 }
 
 process pileup {
     publishDir "${workflow.launchDir}/results/pileups", mode: 'copy'
-    
+
     input:
-    path demuxed_bam
-    path reference_file
-    
+    tuple path(bam), path(bai)
+    each path(reference_file)
+
     output:
     path "*.bed"
-    
+
     script:
     """
-    modkit pileup \
-        ${demuxed_bam} \
-        ${demuxed_bam.baseName}.bed \
+    modkit pileup ${bam} ${bam.baseName}.bed \
         --ref ${reference_file} \
-        --filter-threshold 0.90 \
+        -n 40000 \
+        --filter-threshold 0.90
     """
 }
 
@@ -201,7 +200,7 @@ workflow {
 
     // Pileup per demuxed file
     pileup_ch = pileup(
-        sorted_ch.bam.flatten(),
+        sorted_ch,
         reference_ch
     )
     
