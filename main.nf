@@ -10,10 +10,8 @@ params.model = 'rna004_130bps_sup@v5.1.0'
 params.modif = 'pseU'
 params.reference = 'data/reference/Homo_sapiens.rRNA.fasta'
 params.seqtagger_sif = null
-
-/*params.bam_dir = 'results/demultiplex_bam/'
-*params.sample_sheet = 'data/RNA_barcodes_sampleSheet.csv'
-*/
+params.sample_sheet = 'data/sample_sheet.csv'
+params.region = 'data/reference/region.bed'
 
 process dorado_model {
     storeDir "${workflow.launchDir}/models"
@@ -64,6 +62,7 @@ process sort_index_bam {
     tuple path("*.sorted.bam"), path("*.sorted.bam.bai"), emit: sorted
     
     script:
+    def sample = bam_file.baseName
     """
     samtools sort -o ${bam_file.baseName}.sorted.bam ${bam_file}
     samtools index ${bam_file.baseName}.sorted.bam
@@ -127,6 +126,21 @@ process seqtagger_demultiplex {
     """
 }
 
+process change_name {
+    publishDir "${workflow.launchDir}/results/demultiplexed_bams", mode: 'copy'
+
+    input:
+    tuple val(barcode), path(bam_file), val(sample_name)
+
+    output:
+    path "${sample_name}.bam"
+
+    script:
+    """
+    cp ${bam_file} ${sample_name}.bam
+    """
+}
+
 process pileup {
     publishDir "${workflow.launchDir}/results/pileups", mode: 'copy'
 
@@ -146,7 +160,28 @@ process pileup {
     """
 }
 
-process Rreport {
+process SingleReads {
+    publishDir "${workflow.launchDir}/results/SingleReads/"
+
+    input:
+    tuple path(bam), path (bai)
+    each path(reference_file)
+    each path(single_region)
+
+    output:
+    path "*tsv"
+
+    script:
+    """
+    modkit extract calls \
+        --include-bed ${single_region} \
+        --ref ${reference_file} \
+        --filter-threshold 0.90 \
+        ${bam} ${bam.baseName}.tsv
+    """
+}
+
+process Rreport_all {
     publishDir "${workflow.launchDir}/results", mode: 'copy'
     
     input:
@@ -159,6 +194,23 @@ process Rreport {
     """
     Rscript ${workflow.projectDir}/scripts/generate_report.R \
         --input ${pileup_files} \
+        --output report.html
+    """
+}
+
+process Rreport_single {
+    publishDir "${workflow.launchDir}/results", mode: 'copy'
+    
+    input:
+    path sinread_files
+    
+    output:
+    path "report.html"
+    
+    script:
+    """
+    Rscript ${workflow.projectDir}/scripts/generate_report.R \
+        --input ${sinread_files} \
         --output report.html
     """
 }
@@ -195,15 +247,44 @@ workflow {
         sif_ch
     )
     
-        // Sort and index
-    sorted_ch = sort_index_bam(demux_ch.flatten())
+    // Reading sample sheet
+    sample_map = Channel.fromPath(params.sample_sheet)
+                        .splitCsv(sep: ',', header: true)
+                        .map {row-> [row.barcode, row.sample_name]}
 
-    // Pileup per demuxed file
+    // Extraction of barcode numbers
+    bam_ch = demux_ch.flatten()
+                    .map { file ->
+                        def matcher = (file.name =~ /output\.bc_(\d+)\.bam/)
+                        def barcode = matcher[0][1]
+                        [barcode, file]
+    }
+
+    // Matching barcodes with samples
+    renamed_ch = bam_ch.join(sample_map, by: 0)
+                        .map { barcode, bam_file, sample_name -> tuple(barcode, bam_file, sample_name)
+        }
+
+    renamed_bams = change_name(renamed_ch)
+
+    // Sort and index
+    sorted_ch = sort_index_bam(renamed_bams.flatten())
+
+    // SingleReads per bam
+    sinread_ch = SingleReads(
+        sorted_ch,
+        reference_ch,
+        channel.fromPath(params.region)
+    )
+
+    // Pileup per bam
     pileup_ch = pileup(
         sorted_ch,
         reference_ch
     )
     
     // Generate report
-    Rreport(pileup_ch.collect())
+    Rreport_all(pileup_ch.collect())
+    Rreport_single(sinread_ch.collect())
+    
 }
