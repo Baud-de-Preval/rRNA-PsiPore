@@ -2,16 +2,21 @@
 nextflow.enable.dsl=2
 
 /*
- * Pipeline parameters - MUST be at top level, outside any blocks
+ * Pipeline parameters
  */
 
 params.pod5_dir = 'data/pod5/'
-params.model = 'rna004_130bps_sup@v5.1.0'
-params.modif = 'pseU'
+params.model = 'rna004_130bps_sup@v5.3.0'
+params.modif = 'pseU_2OmeU,inosine_m6A_2OmeA,2OmeG,m5C_2OmeC'
 params.reference = 'data/reference/Homo_sapiens.rRNA.fasta'
 params.seqtagger_sif = null
 params.sample_sheet = 'data/sample_sheet.csv'
 params.region = 'data/reference/region.bed'
+params.multiplex = true
+
+/*
+* Pipeline parameters
+*/
 
 process dorado_model {
     storeDir "${workflow.launchDir}/models"
@@ -41,15 +46,15 @@ process dorado_basecall {
     path "output.bam"
     
     script:
+    def modif_list = modif.split(',').join(' ')
     """
     dorado basecaller \
         ${model} \
         ${pod5_dir} \
-        --modified-bases ${modif} \
+        --modified-bases ${modif_list} \
         --reference ${reference_file} \
         --mm2-opts "-x map-ont -N 0 -k 13" \
-        > output.bam \
-        2> dorado_basecall.log
+        > output.bam
     """
 }
 
@@ -176,7 +181,6 @@ process SingleReads {
     modkit extract calls \
         --include-bed ${single_region} \
         --ref ${reference_file} \
-        --filter-threshold 0.90 \
         ${bam} ${bam.baseName}.tsv
     """
 }
@@ -223,15 +227,6 @@ workflow {
 
     // Download model if needed
     model_ch = dorado_model(params.model)
-    
-    // Use existing .sif OR download it
-    if (params.seqtagger_sif) {
-        sif_ch = channel.fromPath(params.seqtagger_sif)
-    } else {
-        sif_ch = download_seqtagger_image()
-    }
-    
-    index_ch = seqtagger_index(sif_ch)
 
     // Basecall all pod5 files
     if (file("${workflow.launchDir}/results/demultiplexed_bams/output.bam").exists()) {
@@ -239,52 +234,53 @@ workflow {
     } else {
         bam_ch = dorado_basecall(pod5_dir_ch, reference_ch, model_ch, params.modif)
     }
-        
-    // Demultiplex using the index
-    demux_ch = seqtagger_demultiplex(
-        bam_ch,
-        index_ch,
-        sif_ch
-    )
-    
-    // Reading sample sheet
-    sample_map = Channel.fromPath(params.sample_sheet)
-                        .splitCsv(sep: ',', header: true)
-                        .map {row-> [row.barcode, row.sample_name]}
 
-    // Extraction of barcode numbers
-    bam_ch = demux_ch.flatten()
-                    .map { file ->
-                        def matcher = (file.name =~ /output\.bc_(\d+)\.bam/)
-                        def barcode = matcher[0][1]
-                        [barcode, file]
-    }
-
-    // Matching barcodes with samples
-    renamed_ch = bam_ch.join(sample_map, by: 0)
-                        .map { barcode, bam_file, sample_name -> tuple(barcode, bam_file, sample_name)
+    if (params.multiplex) {
+        // Use existing .sif OR download it
+        if (params.seqtagger_sif) {
+            sif_ch = channel.fromPath(params.seqtagger_sif)
+        } else {
+            sif_ch = download_seqtagger_image()
         }
 
-    renamed_bams = change_name(renamed_ch)
+        index_ch = seqtagger_index(sif_ch)
 
-    // Sort and index
-    sorted_ch = sort_index_bam(renamed_bams.flatten())
+        // Demultiplex using the index
+        demux_ch = seqtagger_demultiplex(bam_ch, index_ch, sif_ch)
 
-    // SingleReads per bam
+        // Reading sample sheet
+        sample_map = Channel.fromPath(params.sample_sheet)
+                            .splitCsv(sep: ',', header: true)
+                            .map { row -> [row.barcode, row.sample_name] }
+
+        // Extraction of barcode numbers
+        bam_parsed_ch = demux_ch.flatten()
+                        .map { file ->
+                            def matcher = (file.name =~ /output\.bc_(\d+)\.bam/)
+                            def barcode = matcher[0][1]
+                            [barcode, file]
+                        }
+
+        // Matching barcodes with samples, rename
+        renamed_ch = bam_parsed_ch.join(sample_map, by: 0)
+                        .map { barcode, bam_file, sample_name -> tuple(barcode, bam_file, sample_name) }
+
+        sorted_ch = sort_index_bam(change_name(renamed_ch).flatten())
+
+    } else {
+        // Non-multiplexed: sort & index the raw basecalled BAM directly
+        sorted_ch = sort_index_bam(bam_ch)
+    }
+
+    // From here on, identical for both modes
     sinread_ch = SingleReads(
         sorted_ch,
         reference_ch,
         channel.fromPath(params.region)
     )
 
-    // Pileup per bam
-    pileup_ch = pileup(
-        sorted_ch,
-        reference_ch
-    )
-    
-    // Generate report
+    pileup_ch = pileup(sorted_ch, reference_ch)
+
     Rreport_all(pileup_ch.collect())
     Rreport_single(sinread_ch.collect())
-    
 }
