@@ -38,9 +38,9 @@ nextflow run main.nf -with-conda --multiplex true
 
 ## Citation
 
-If you use this pipeline, please cite:
+#If you use this pipeline, please cite:
 
-> Author et al. (2026). *Nanopore Direct RNA Sequencing Enables Reproducible, Site-Resolved Pseudouridine Quantification in Human Ribosomal RNA *. Journal, volume(issue), pages. https://doi.org/xxxxx
+#> Author et al. (2026). *Nanopore Direct RNA Sequencing Enables Reproducible, Site-Resolved Pseudouridine Quantification in Human Ribosomal RNA *. Journal, volume(issue), pages. https://doi.org/#xxxxx
 
 Also cite the underlying tool:
 - **Seqtagger**: 
