@@ -1,38 +1,33 @@
 # rRNA - PsiPore
+
 Simple Nextflow pipeline to call RNA modifications via dorado basecaller models.
-
----
-
-## Table of Contents
-
-- [Overview] (#Overview)
-- [Dependencies] (#dependencies)
-- [Installation] (#installation)
-- [Run] (#Run)
-- [Citation] (#Citation)
-- [Contact] (#Contact)
- 
----
 
 ## Overview
 
-This nextflow pipeline uses tools developped by nanopore sequencing to quantify pseudouridine stoichiometries on human ribosomal RNA.
-It uses seqtagger with Apptainer to demultiplex aligned reads and modkit to assess the modification frequencies. GPU access is needed to run the pipeline for the basecalling and demplutiplexing steps.
+This Nextflow pipeline quantifies pseudouridine (Ψ) stoichiometries on human ribosomal RNA from Oxford Nanopore direct RNA sequencing data (pod5). It integrates SeqTagger for barcode demultiplexing and modkit for per-site modification frequency estimation, producing ready-to-use modification tables.
 
----
+> ⚠️ GPU access is required for the basecalling and demultiplexing steps.
 
 ## Dependencies
 
-Please, make sure you have the latest version of dorado (https://github.com/nanoporetech/dorado) to access the up-to-date modification models.
+Please, note this pipeline was run with the rna004_130bps_sup@v5.1.0 model. 
+You can access more recent models with the latest version of dorado (see https://software-docs.nanoporetech.com/dorado/latest/models/list/).
 
----
+| Tool | Version | Purpose |
+|------|---------|---------|
+| Nextflow | ≥ 25.0 | Workflow manager |
+| Dorado | = 1.4.0 | Reads basecall |
+| Apptainer | ≥ 1.3 | Containerization |
+| samtools | = 1.22.1 | BAM processing |
+| modkit | = 0.5.1 | Manipulation of bedMethyl files |
 
 ## Installation
+
+You will need to install nextflow []
 
 ```bash
 
 ```
----
 
 ## Run
 
