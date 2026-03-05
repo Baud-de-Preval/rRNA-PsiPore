@@ -7,5 +7,3 @@ dependencies:
   - dorado==1.4.0
   - modkit==0.6.0
   - samtools==1.22.1
-  - r-base
-  - r-essentials 
