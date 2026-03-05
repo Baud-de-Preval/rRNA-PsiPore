@@ -10,9 +10,6 @@ This Nextflow pipeline quantifies pseudouridine (Ψ) stoichiometries on human ri
 
 ## Dependencies
 
-Please, note this pipeline was run with the rna004_130bps_sup@v5.1.0 model. 
-You can access more recent models with the latest version of dorado (see https://software-docs.nanoporetech.com/dorado/latest/models/list/).
-
 | Tool | Version | Purpose |
 |------|---------|---------|
 | Nextflow | ≥ 25.0 | Workflow manager |
@@ -21,15 +18,13 @@ You can access more recent models with the latest version of dorado (see https:/
 | samtools | = 1.22.1 | BAM processing |
 | modkit | = 0.5.1 | Manipulation of bedMethyl files |
 
-## Installation
-
-You will need to install nextflow []
-
-```bash
-
-```
-
+Make sure you have [Nextflow](https://www.nextflow.io/docs/latest/install.html), [Conda](https://docs.conda.io/projects/conda/en/latest/user-guide/install/index.html) and [Apptainer](https://apptainer.org/docs/user/latest/quick_start.html#installation) installed.
+ 
 ## Run
+
+Please, note this pipeline was run with the rna004_130bps_sup@v5.1.0 model. You can access more recent models with the latest version of dorado (see https://software-docs.nanoporetech.com/dorado/latest/models/list/).
+
+The sample names can be renamed and adapted in `data/sample_sheet.csv` with the corresponding number of barcode (up to 96).
 
 ```bash
 nextflow run main.nf -with-conda --multiplex true
@@ -37,13 +32,6 @@ nextflow run main.nf -with-conda --multiplex true
 ---
 
 ## Citation
-
-#If you use this pipeline, please cite:
-
-#> Author et al. (2026). *Nanopore Direct RNA Sequencing Enables Reproducible, Site-Resolved Pseudouridine Quantification in Human Ribosomal RNA *. Journal, volume(issue), pages. https://doi.org/#xxxxx
-
-Also cite the underlying tool:
-- **Seqtagger**: 
 
 ---
 
