@@ -35,7 +35,4 @@ nextflow run main.nf -with-conda --multiplex true
 
 ---
 
-## Contact
-
-Email: Baudouin.Seguineau.De.Preval@USherbrooke.ca
----
+**Contact**: Baudouin.Seguineau.De.Preval@USherbrooke.ca
