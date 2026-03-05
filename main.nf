@@ -6,8 +6,8 @@ nextflow.enable.dsl=2
  */
 
 params.pod5_dir = 'data/pod5/'
-params.model = 'rna004_130bps_sup@v5.3.0'
-params.modif = 'pseU_2OmeU,inosine_m6A_2OmeA,2OmeG,m5C_2OmeC'
+params.model = 'rna004_130bps_sup@v5.1.0'
+params.modif = 'pseU'
 params.reference = 'data/reference/Homo_sapiens.rRNA.fasta'
 params.seqtagger_sif = null
 params.sample_sheet = 'data/sample_sheet.csv'
@@ -97,7 +97,7 @@ process seqtagger_index {
     
     script:
     """
-    apptainer run --nv \
+    apptainer run --nv --no-home \
         --bind ${workflow.launchDir}/data:/data \
         ${sif_file} \
         mRNA -k /opt/app/models/b96_RNA004 -r \
@@ -108,7 +108,7 @@ process seqtagger_index {
 
 process seqtagger_demultiplex {
     storeDir "${workflow.launchDir}/results/demultiplexed_bams"
-    errorStrategy 'ignore'
+
 
     input:
     path bam_file
@@ -120,7 +120,7 @@ process seqtagger_demultiplex {
 
     script:
     """
-    apptainer run --nv \
+    apptainer run --nv --no-home\
         --bind \$(pwd):/work \
         --bind ${workflow.launchDir}/data:/data \
         ${sif_file} \
