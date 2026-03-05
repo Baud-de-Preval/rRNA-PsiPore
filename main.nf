@@ -2,7 +2,7 @@
 nextflow.enable.dsl=2
 
 /*
- * Pipeline parameters - MUST be at top level, outside any blocks
+ * Pipeline parameters
  */
 
 params.pod5_dir = 'data/pod5/'
@@ -10,9 +10,12 @@ params.model = 'rna004_130bps_sup@v5.1.0'
 params.modif = 'pseU'
 params.reference = 'data/reference/Homo_sapiens.rRNA.fasta'
 params.seqtagger_sif = null
+params.sample_sheet = 'data/sample_sheet.csv'
+params.region = 'data/reference/region.bed'
+params.multiplex = true
 
-/*params.bam_dir = 'results/demultiplex_bam/'
-*params.sample_sheet = 'data/RNA_barcodes_sampleSheet.csv'
+/*
+* Pipeline parameters
 */
 
 process dorado_model {
@@ -43,15 +46,15 @@ process dorado_basecall {
     path "output.bam"
     
     script:
+    def modif_list = modif.split(',').join(' ')
     """
     dorado basecaller \
         ${model} \
         ${pod5_dir} \
-        --modified-bases ${modif} \
+        --modified-bases ${modif_list} \
         --reference ${reference_file} \
         --mm2-opts "-x map-ont -N 0 -k 13" \
-        > output.bam \
-        2> dorado_basecall.log
+        > output.bam
     """
 }
 
@@ -64,6 +67,7 @@ process sort_index_bam {
     tuple path("*.sorted.bam"), path("*.sorted.bam.bai"), emit: sorted
     
     script:
+    def sample = bam_file.baseName
     """
     samtools sort -o ${bam_file.baseName}.sorted.bam ${bam_file}
     samtools index ${bam_file.baseName}.sorted.bam
@@ -93,7 +97,7 @@ process seqtagger_index {
     
     script:
     """
-    apptainer run --nv \
+    apptainer run --nv --no-home \
         --bind ${workflow.launchDir}/data:/data \
         ${sif_file} \
         mRNA -k /opt/app/models/b96_RNA004 -r \
@@ -104,7 +108,7 @@ process seqtagger_index {
 
 process seqtagger_demultiplex {
     storeDir "${workflow.launchDir}/results/demultiplexed_bams"
-    errorStrategy 'ignore'
+
 
     input:
     path bam_file
@@ -116,7 +120,7 @@ process seqtagger_demultiplex {
 
     script:
     """
-    apptainer run --nv \
+    apptainer run --nv --no-home\
         --bind \$(pwd):/work \
         --bind ${workflow.launchDir}/data:/data \
         ${sif_file} \
@@ -124,6 +128,21 @@ process seqtagger_demultiplex {
         -i /data/pod5/demux/${index} \
         -f /work/${bam_file} \
         -o /work/output; exit 0
+    """
+}
+
+process change_name {
+    publishDir "${workflow.launchDir}/results/demultiplexed_bams", mode: 'copy'
+
+    input:
+    tuple val(barcode), path(bam_file), val(sample_name)
+
+    output:
+    path "${sample_name}.bam"
+
+    script:
+    """
+    cp ${bam_file} ${sample_name}.bam
     """
 }
 
@@ -146,7 +165,27 @@ process pileup {
     """
 }
 
-process Rreport {
+process SingleReads {
+    publishDir "${workflow.launchDir}/results/SingleReads/"
+
+    input:
+    tuple path(bam), path (bai)
+    each path(reference_file)
+    each path(single_region)
+
+    output:
+    path "*tsv"
+
+    script:
+    """
+    modkit extract calls \
+        --include-bed ${single_region} \
+        --ref ${reference_file} \
+        ${bam} ${bam.baseName}.tsv
+    """
+}
+
+process Rreport_all {
     publishDir "${workflow.launchDir}/results", mode: 'copy'
     
     input:
@@ -163,6 +202,23 @@ process Rreport {
     """
 }
 
+process Rreport_single {
+    publishDir "${workflow.launchDir}/results", mode: 'copy'
+    
+    input:
+    path sinread_files
+    
+    output:
+    path "report.html"
+    
+    script:
+    """
+    Rscript ${workflow.projectDir}/scripts/generate_report.R \
+        --input ${sinread_files} \
+        --output report.html
+    """
+}
+
 // ===== WORKFLOW =====
 
 workflow {
@@ -171,15 +227,6 @@ workflow {
 
     // Download model if needed
     model_ch = dorado_model(params.model)
-    
-    // Use existing .sif OR download it
-    if (params.seqtagger_sif) {
-        sif_ch = channel.fromPath(params.seqtagger_sif)
-    } else {
-        sif_ch = download_seqtagger_image()
-    }
-    
-    index_ch = seqtagger_index(sif_ch)
 
     // Basecall all pod5 files
     if (file("${workflow.launchDir}/results/demultiplexed_bams/output.bam").exists()) {
@@ -187,23 +234,53 @@ workflow {
     } else {
         bam_ch = dorado_basecall(pod5_dir_ch, reference_ch, model_ch, params.modif)
     }
-        
-    // Demultiplex using the index
-    demux_ch = seqtagger_demultiplex(
-        bam_ch,
-        index_ch,
-        sif_ch
-    )
-    
-        // Sort and index
-    sorted_ch = sort_index_bam(demux_ch.flatten())
 
-    // Pileup per demuxed file
-    pileup_ch = pileup(
+    if (params.multiplex) {
+        // Use existing .sif OR download it
+        if (params.seqtagger_sif) {
+            sif_ch = channel.fromPath(params.seqtagger_sif)
+        } else {
+            sif_ch = download_seqtagger_image()
+        }
+
+        index_ch = seqtagger_index(sif_ch)
+
+        // Demultiplex using the index
+        demux_ch = seqtagger_demultiplex(bam_ch, index_ch, sif_ch)
+
+        // Reading sample sheet
+        sample_map = Channel.fromPath(params.sample_sheet)
+                            .splitCsv(sep: ',', header: true)
+                            .map { row -> [row.barcode, row.sample_name] }
+
+        // Extraction of barcode numbers
+        bam_parsed_ch = demux_ch.flatten()
+                        .map { file ->
+                            def matcher = (file.name =~ /output\.bc_(\d+)\.bam/)
+                            def barcode = matcher[0][1]
+                            [barcode, file]
+                        }
+
+        // Matching barcodes with samples, rename
+        renamed_ch = bam_parsed_ch.join(sample_map, by: 0)
+                        .map { barcode, bam_file, sample_name -> tuple(barcode, bam_file, sample_name) }
+
+        sorted_ch = sort_index_bam(change_name(renamed_ch).flatten())
+
+    } else {
+        // Non-multiplexed: sort & index the raw basecalled BAM directly
+        sorted_ch = sort_index_bam(bam_ch)
+    }
+
+    // From here on, identical for both modes
+    sinread_ch = SingleReads(
         sorted_ch,
-        reference_ch
+        reference_ch,
+        channel.fromPath(params.region)
     )
-    
-    // Generate report
-    Rreport(pileup_ch.collect())
+
+    pileup_ch = pileup(sorted_ch, reference_ch)
+
+    Rreport_all(pileup_ch.collect())
+    Rreport_single(sinread_ch.collect())
 }
