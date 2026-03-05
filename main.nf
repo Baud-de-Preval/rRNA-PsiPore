@@ -11,7 +11,6 @@ params.modif = 'pseU'
 params.reference = 'data/reference/Homo_sapiens.rRNA.fasta'
 params.seqtagger_sif = null
 params.sample_sheet = 'data/sample_sheet.csv'
-params.region = 'data/reference/region.bed'
 params.multiplex = true
 
 /*
@@ -165,60 +164,6 @@ process pileup {
     """
 }
 
-process SingleReads {
-    publishDir "${workflow.launchDir}/results/SingleReads/"
-
-    input:
-    tuple path(bam), path (bai)
-    each path(reference_file)
-    each path(single_region)
-
-    output:
-    path "*tsv"
-
-    script:
-    """
-    modkit extract calls \
-        --include-bed ${single_region} \
-        --ref ${reference_file} \
-        ${bam} ${bam.baseName}.tsv
-    """
-}
-
-process Rreport_all {
-    publishDir "${workflow.launchDir}/results", mode: 'copy'
-    
-    input:
-    path pileup_files
-    
-    output:
-    path "report.html"
-    
-    script:
-    """
-    Rscript ${workflow.projectDir}/scripts/generate_report.R \
-        --input ${pileup_files} \
-        --output report.html
-    """
-}
-
-process Rreport_single {
-    publishDir "${workflow.launchDir}/results", mode: 'copy'
-    
-    input:
-    path sinread_files
-    
-    output:
-    path "report.html"
-    
-    script:
-    """
-    Rscript ${workflow.projectDir}/scripts/generate_report.R \
-        --input ${sinread_files} \
-        --output report.html
-    """
-}
-
 // ===== WORKFLOW =====
 
 workflow {
@@ -272,15 +217,6 @@ workflow {
         sorted_ch = sort_index_bam(bam_ch)
     }
 
-    // From here on, identical for both modes
-    sinread_ch = SingleReads(
-        sorted_ch,
-        reference_ch,
-        channel.fromPath(params.region)
-    )
 
     pileup_ch = pileup(sorted_ch, reference_ch)
-
-    Rreport_all(pileup_ch.collect())
-    Rreport_single(sinread_ch.collect())
 }
