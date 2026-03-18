@@ -6,8 +6,9 @@ nextflow.enable.dsl=2
  */
 
 params.pod5_dir = 'data/pod5/'
-params.model = 'rna004_130bps_sup@v5.1.0'
-params.modif = 'pseU'
+params.model = 'rna004_130bps_sup@v5.3.0'
+params.modif = 'm5C_2OmeC'
+/*pseU_2OmeU,inosine_m6A_2OmeA,m5C_2OmeC,2OmeG*/
 params.reference = 'data/reference/Homo_sapiens.rRNA.fasta'
 params.seqtagger_sif = null
 params.sample_sheet = 'data/sample_sheet.csv'
@@ -34,27 +35,24 @@ process dorado_model {
 }
 
 process dorado_basecall {
-    storeDir "${workflow.launchDir}/results/demultiplexed_bams"
+    storeDir "${workflow.launchDir}/results/demultiplexed_bams/${modif}"
 
     input:
-    path pod5_dir
-    path reference_file
-    val model
-    val modif
-    
+    tuple val(modif), path(pod5_dir), path(reference_file), val(model)
+
     output:
-    path "output.bam"
-    
+    path "${modif}.bam"
+
     script:
-    def modif_list = modif.split(',').join(' ')
     """
     dorado basecaller \
         ${model} \
         ${pod5_dir} \
-        --modified-bases ${modif_list} \
+        --modified-bases ${modif} \
         --reference ${reference_file} \
+        --emit-summary \
         --mm2-opts "-x map-ont -N 0 -k 13" \
-        > output.bam
+        > ${modif}.bam
     """
 }
 
@@ -222,18 +220,22 @@ process Rreport_single {
 // ===== WORKFLOW =====
 
 workflow {
-    pod5_dir_ch = channel.fromPath(params.pod5_dir, type: 'dir')
-    reference_ch = channel.fromPath(params.reference)
-
-    // Download model if needed
-    model_ch = dorado_model(params.model)
+    pod5_dir_ch  = Channel.fromPath(params.pod5_dir, type: 'dir').first()
+    reference_ch = Channel.fromPath(params.reference).first()
+    model_ch     = dorado_model(params.model).first()
 
     // Basecall all pod5 files
-    if (file("${workflow.launchDir}/results/demultiplexed_bams/output.bam").exists()) {
-        bam_ch = Channel.fromPath("${workflow.launchDir}/results/demultiplexed_bams/output.bam")
-    } else {
-        bam_ch = dorado_basecall(pod5_dir_ch, reference_ch, model_ch, params.modif)
-    }
+    modif_ch = Channel.of(params.modif.split(','))
+                      .flatten()
+                      .map { it.trim() }
+
+    combined_ch = modif_ch
+        .combine(pod5_dir_ch)
+        .combine(reference_ch)
+        .combine(model_ch)
+
+    bam_ch = dorado_basecall(combined_ch)
+
 
     if (params.multiplex) {
         // Use existing .sif OR download it
@@ -281,6 +283,4 @@ workflow {
 
     pileup_ch = pileup(sorted_ch, reference_ch)
 
-    Rreport_all(pileup_ch.collect())
-    Rreport_single(sinread_ch.collect())
 }
