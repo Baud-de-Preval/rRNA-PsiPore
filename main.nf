@@ -110,13 +110,13 @@ process seqtagger_demultiplex {
 }
 
 process change_name {
-    publishDir "${workflow.launchDir}/results/demultiplexed_bams/${modif}", mode: 'copy'
+    storeDir "${workflow.launchDir}/results/demultiplexed_bams/${modif}"
 
     input:
     tuple val(modif), val(sample_name), path(bam_file)
     
     output:
-    tuple val(modif), path("${sample_name}_${modif}.bam")
+    tuple val(modif), val(sample_name), path("${sample_name}_${modif}.bam")
     
     script:
     """
@@ -125,14 +125,13 @@ process change_name {
 }
 
 process sort_index_bam {
-    publishDir "${workflow.launchDir}/results/sorted_bams/${modif}", mode: 'copy'
-    errorStrategy 'ignore'
+    storeDir "${workflow.launchDir}/results/sorted_bams/${modif}"
 
     input:
-    tuple val(modif), path(bam_file)
+    tuple val(modif), val(sample_name), path(bam_file)
     
     output:
-    tuple val(modif), path("${bam_file.baseName}.sorted.bam"), path("${bam_file.baseName}.sorted.bam.bai"), emit: sorted
+    tuple val(sample_name), val(modif), path("${bam_file.baseName}.sorted.bam"), path("${bam_file.baseName}.sorted.bam.bai"), emit: sorted_bam
     
     script:
     """
@@ -142,75 +141,66 @@ process sort_index_bam {
 }
 
 process pileup {
-    publishDir "${workflow.launchDir}/results/pileups/${modif}", mode: 'copy'
-
+    
     input:
-    tuple val(modif), path(bam), path(bai)
-    path reference_file
-
+    tuple val(sample_name), val(modif), path(bam), path(bai), path(reference_file)
+    
     output:
-    tuple val(modif), path("*.bed")
-
+    tuple val(sample_name), val(modif), path("${sample_name}_${modif}.bed")
+    
     script:
     """
-    modkit pileup ${bam} ${bam.baseName}.bed \
+    modkit pileup ${bam} ${sample_name}_${modif}.bed \
         --ref ${reference_file} \
         -n 40000 \
         --filter-threshold 0.90
     """
 }
 
-process SingleReads {
-    publishDir "${workflow.launchDir}/results/SingleReads/${modif}", mode: 'copy'
-
+process merge_pileups {
+    storeDir "${workflow.launchDir}/results/pileups"
+    
     input:
-    tuple val(modif), path(bam), path(bai)
-    path reference_file
-    path single_region
-
+    tuple val(sample_name), path(bed_files)
+    
     output:
-    tuple val(modif), path("*.tsv")
+    tuple val(sample_name), path("${sample_name}_merged.bed")
+    
+    script:
+    """
+    cat ${bed_files} > ${sample_name}_merged.bed
+    """
+}
 
+process SingleReads {
+    
+    input:
+    tuple val(sample_name), val(modif), path(bam), path(bai), path(reference_file), path(region_file)
+    
+    output:
+    tuple val(sample_name), val(modif), path("${sample_name}_${modif}.tsv")
+    
     script:
     """
     modkit extract calls \
-        --include-bed ${single_region} \
+        --include-bed ${region_file} \
         --ref ${reference_file} \
-        ${bam} ${bam.baseName}.tsv
+        ${bam} ${sample_name}_${modif}.tsv
     """
 }
 
-process Rreport_all {
-    publishDir "${workflow.launchDir}/results", mode: 'copy'
+process merge_singlereads {
+    storeDir "${workflow.launchDir}/results/SingleReads"
     
     input:
-    path pileup_files
+    tuple val(sample_name), path(tsv_files)
     
     output:
-    path "report.html"
+    tuple val(sample_name), path("${sample_name}_merged.tsv")
     
     script:
     """
-    Rscript ${workflow.projectDir}/scripts/generate_report.R \
-        --input ${pileup_files} \
-        --output report.html
-    """
-}
-
-process Rreport_single {
-    publishDir "${workflow.launchDir}/results", mode: 'copy'
-    
-    input:
-    path sinread_files
-    
-    output:
-    path "report.html"
-    
-    script:
-    """
-    Rscript ${workflow.projectDir}/scripts/generate_report.R \
-        --input ${sinread_files} \
-        --output report.html
+    cat ${tsv_files} > ${sample_name}_merged.tsv
     """
 }
 
@@ -249,7 +239,7 @@ if (params.multiplex) {
     // Read sample sheet into map
     def sample_map = [:]
     file(params.sample_sheet).eachLine { line ->
-        if (!line.startsWith('barcode')) {  // skip header
+        if (!line.startsWith('barcode')) {
             def parts = line.split(',')
             sample_map[parts[0]] = parts[1]
         }
@@ -270,12 +260,27 @@ if (params.multiplex) {
     }
 
     renamed_bam = change_name(renamed_ch)
-    sorted_bam = sort_index_bam(renamed_bam)
+    sorted_bam_ch = sort_index_bam(renamed_bam).sorted_bam
 
 } else {
-    sorted_bam = sort_index_bam(bam_ch)
+    sorted_bam_ch = sort_index_bam(bam_ch).sorted_bam
 }
 
-pileup_result = pileup(sorted_bam.sorted, reference_ch)
-sinread_result = SingleReads(sorted_bam.sorted, reference_ch, region_ch)
+pileup_input = sorted_bam_ch.combine(reference_ch)
+pileup_result = pileup(pileup_input)
+
+merged_pileups = pileup_result
+    .groupTuple(by: 0)  // Group by sample_name
+    .map { sample_name, modifs, beds -> [sample_name, beds.flatten()] }
+
+merge_pileup_result = merge_pileups(merged_pileups)
+
+sinread_input = sorted_bam_ch.combine(reference_ch).combine(region_ch)
+sinread_result = SingleReads(sinread_input)
+
+merged_sinreads = sinread_result
+    .groupTuple(by: 0)  // Group by sample_name
+    .map { sample_name, modifs, tsvs -> [sample_name, tsvs.flatten()] }
+
+merge_sinread_result = merge_singlereads(merged_sinreads)
 }
