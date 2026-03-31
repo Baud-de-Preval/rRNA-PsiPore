@@ -141,7 +141,7 @@ process sort_index_bam {
 }
 
 process pileup {
-    
+    storeDir "${workflow.launchDir}/results/pileups"
     input:
     tuple val(sample_name), val(modif), path(bam), path(bai), path(reference_file)
     
@@ -189,18 +189,45 @@ process SingleReads {
     """
 }
 
+/*
+To compare the fraction of pileup and single read calls, 
+we want to label the negative calls in the single read output with the modification name.
+*/
+
+process label_negative_calls {
+    storeDir "${workflow.launchDir}/results/SingleReads/labeled"
+    errorStrategy 'ignore'
+    
+    input:
+    tuple val(sample_name), val(modif), path(tsv)
+
+    output:
+    tuple val(sample_name), path("${sample_name}_${modif}_labeled.tsv")
+
+    script:
+    """
+    awk 'NR==1 {print; next} \$14 == "-" {OFS="\\t"; \$14 = "-(${modif})"; print; next} {print}' ${tsv} \
+        > ${sample_name}_${modif}_labeled.tsv
+    """
+}
+
 process merge_singlereads {
     storeDir "${workflow.launchDir}/results/SingleReads"
     
     input:
-    tuple val(sample_name), path(tsv_files)
+    tuple val(sample_name), path(tsv_files)  // path() handles lists fine, the issue is upstream
     
     output:
     tuple val(sample_name), path("${sample_name}_merged.tsv")
     
     script:
     """
-    cat ${tsv_files} > ${sample_name}_merged.tsv
+    # Take header from first file only, append data from all
+    first=(\$(echo "${tsv_files}" | tr ' ' '\n' | head -1))
+    head -1 \${first} > ${sample_name}_merged.tsv
+    for f in ${tsv_files}; do
+        tail -n +2 \$f >> ${sample_name}_merged.tsv
+    done
     """
 }
 
@@ -278,9 +305,16 @@ merge_pileup_result = merge_pileups(merged_pileups)
 sinread_input = sorted_bam_ch.combine(reference_ch).combine(region_ch)
 sinread_result = SingleReads(sinread_input)
 
-merged_sinreads = sinread_result
-    .groupTuple(by: 0)  // Group by sample_name
-    .map { sample_name, modifs, tsvs -> [sample_name, tsvs.flatten()] }
+sinread_labeled = label_negative_calls(sinread_result)
 
-merge_sinread_result = merge_singlereads(merged_sinreads)
+merged_input_ch = sinread_labeled
+        | groupTuple(by: 0)
+        | map { sample_name, files ->
+            tuple(sample_name, files.flatten().findAll { it != null })
+        }
+        | filter { sample_name, files ->
+            files.size() > 0
+        }
+
+    merge_singlereads(merged_input_ch)
 }
