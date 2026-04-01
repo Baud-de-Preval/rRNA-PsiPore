@@ -173,7 +173,7 @@ process merge_pileups {
 }
 
 process SingleReads {
-    
+    storeDir "${workflow.launchDir}/results/SingleReads/"
     input:
     tuple val(sample_name), val(modif), path(bam), path(bai), path(reference_file), path(region_file)
     
@@ -213,7 +213,8 @@ process label_negative_calls {
 
 process merge_singlereads {
     storeDir "${workflow.launchDir}/results/SingleReads"
-    
+    errorStrategy 'ignore'
+
     input:
     tuple val(sample_name), path(tsv_files)  // path() handles lists fine, the issue is upstream
     
@@ -221,11 +222,16 @@ process merge_singlereads {
     tuple val(sample_name), path("${sample_name}_merged.tsv")
     
     script:
+    def files = tsv_files instanceof List ? tsv_files : [tsv_files]
+    def first  = files[0]
+    def all    = files.join(' ')
+
     """
-    # Take header from first file only, append data from all
-    first=(\$(echo "${tsv_files}" | tr ' ' '\n' | head -1))
-    head -1 \${first} > ${sample_name}_merged.tsv
-    for f in ${tsv_files}; do
+    # Header from first file
+    head -1 ${first} > ${sample_name}_merged.tsv
+
+    # Data (no header) from all files
+    for f in ${all}; do
         tail -n +2 \$f >> ${sample_name}_merged.tsv
     done
     """
