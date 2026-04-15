@@ -216,7 +216,7 @@ process merge_singlereads {
     errorStrategy 'ignore'
 
     input:
-    tuple val(sample_name), path(tsv_files)  // path() handles lists fine, the issue is upstream
+    tuple val(sample_name), path(tsv_files)
     
     output:
     tuple val(sample_name), path("${sample_name}_merged.tsv")
@@ -255,7 +255,7 @@ workflow {
         .combine(model_ch)
 
     bam_ch = dorado_basecall(basecall_input)
-
+    // If multiplexing, run seqtagger to demultiplex BAMs and rename them with sample names
 if (params.multiplex) {
     sif_ch = params.seqtagger_sif ? 
         Channel.fromPath(params.seqtagger_sif) : 
@@ -278,7 +278,7 @@ if (params.multiplex) {
         }
     }
 
-    // Parse BAMs and lookup sample names
+    // Parse BAMs and lookup sample names in sample_sheet
     renamed_ch = demux_ch.flatMap { modif, files ->
         files.collect { file ->
             def matcher = (file.name =~ /output\.bc_(\d+)\.bam/)
@@ -295,9 +295,11 @@ if (params.multiplex) {
     renamed_bam = change_name(renamed_ch)
     sorted_bam_ch = sort_index_bam(renamed_bam).sorted_bam
 
-} else {
+} else { // If no multiplexing, simply sort and index the single BAM
     sorted_bam_ch = sort_index_bam(bam_ch).sorted_bam
 }
+
+// Run per modification pileup and single read extraction, then merge results for each sample
 
 pileup_input = sorted_bam_ch.combine(reference_ch)
 pileup_result = pileup(pileup_input)
