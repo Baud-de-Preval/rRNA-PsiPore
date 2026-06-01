@@ -11,7 +11,7 @@ params.modif = 'pseU_2OmeU,inosine_m6A_2OmeA,m5C_2OmeC,2OmeG'
 params.reference = 'data/reference/Homo_sapiens.rRNA.fasta'
 params.seqtagger_sif = null
 params.sample_sheet = 'data/sample_sheet.csv'
-params.region = 'data/reference/region.bed'
+params.region = 'data/reference/region_Alban.bed'
 params.multiplex = true
 
 /*
@@ -40,7 +40,8 @@ process dorado_basecall {
     tuple val(modif), path(pod5_dir), path(reference_file), val(model)
 
     output:
-    tuple val(modif), path("${modif}.bam")
+    tuple val(modif), path("${modif}.bam"),     emit: bam
+    path "*_summary.tsv",   emit: summary
 
     script:
     """
@@ -52,6 +53,26 @@ process dorado_basecall {
         --emit-summary \
         --mm2-opts "-x map-ont -N 0 -k 13" \
         > ${modif}.bam
+    """
+}
+
+process toullig_QC {
+    storeDir "${workflow.launchDir}/results/QC"
+
+    input:
+    tuple path(pod5_file), path(summary_file), path(sample_sheet)
+
+    output:
+    path("${modif}_toulligQC.html")
+
+    script:
+    """
+    toulligqc --report-name ONT_run \
+        --sequencing-summary-source ${summary_file} \
+        --pod5-source ${pod5_dir} \
+        --samplesheet ${sample_sheet} \
+        --use-aliases-for-barcodes \
+        --html-report-path ONT_run_toulligQC.html
     """
 }
 
@@ -72,12 +93,11 @@ process seqtagger_index {
     
     input:
     path sif_file
-    
     output:
     path "*.demux.tsv.gz"
-    
     script:
     """
+    export MPLCONFIGDIR=/tmp/matplotlib-\$\$
     apptainer run --nv --no-home \
         --bind ${workflow.launchDir}/data:/data \
         ${sif_file} \
@@ -255,6 +275,14 @@ workflow {
         .combine(model_ch)
 
     bam_ch = dorado_basecall(basecall_input)
+
+    summary_ch = bam_ch.summary.first()
+    toullig_QC(
+    pod5_dir_ch
+        .combine(summary_ch)
+        .combine(Channel.fromPath(params.sample_sheet))
+)
+
     // If multiplexing, run seqtagger to demultiplex BAMs and rename them with sample names
 if (params.multiplex) {
     sif_ch = params.seqtagger_sif ? 
@@ -263,7 +291,7 @@ if (params.multiplex) {
 
     index_ch = seqtagger_index(sif_ch)
     
-    demux_input = bam_ch
+    demux_input = bam_ch.bam
         .combine(index_ch)
         .combine(sif_ch)
     
@@ -296,7 +324,7 @@ if (params.multiplex) {
     sorted_bam_ch = sort_index_bam(renamed_bam).sorted_bam
 
 } else { // If no multiplexing, simply sort and index the single BAM
-    sorted_bam_ch = sort_index_bam(bam_ch).sorted_bam
+    sorted_bam_ch = sort_index_bam(bam_ch.bam).sorted_bam
 }
 
 // Run per modification pileup and single read extraction, then merge results for each sample
