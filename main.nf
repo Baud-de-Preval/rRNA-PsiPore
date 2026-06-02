@@ -40,8 +40,7 @@ process dorado_basecall {
     tuple val(modif), path(pod5_dir), path(reference_file), val(model)
 
     output:
-    tuple val(modif), path("${modif}.bam"),     emit: bam
-    path "*_summary.tsv",   emit: summary
+    tuple val(modif), path("${modif}.bam"), emit: bam
 
     script:
     """
@@ -50,9 +49,23 @@ process dorado_basecall {
         ${pod5_dir} \
         --modified-bases ${modif} \
         --reference ${reference_file} \
-        --emit-summary \
         --mm2-opts "-x map-ont -N 0 -k 13" \
         > ${modif}.bam
+    """
+}
+
+process dorado_summary {
+    storeDir "${workflow.launchDir}/results/demultiplexed_bams/${modif}"
+
+    input:
+    tuple val(modif), path(bam_file)
+
+    output:
+    path("${modif}_summary.tsv")
+
+    script:
+    """
+    dorado summary ${bam_file} > ${modif}_summary.tsv
     """
 }
 
@@ -63,7 +76,7 @@ process toullig_QC {
     tuple path(pod5_file), path(summary_file), path(sample_sheet)
 
     output:
-    path("${modif}_toulligQC.html")
+    path("ONT_toulligQC.html")
 
     script:
     """
@@ -72,7 +85,7 @@ process toullig_QC {
         --pod5-source ${pod5_dir} \
         --samplesheet ${sample_sheet} \
         --use-aliases-for-barcodes \
-        --html-report-path ONT_run_toulligQC.html
+        --html-report-path ONT_toulligQC.html
     """
 }
 
@@ -276,7 +289,8 @@ workflow {
 
     bam_ch = dorado_basecall(basecall_input)
 
-    summary_ch = bam_ch.summary.first()
+    summary_ch = dorado_summary(bam_ch.first())
+
     toullig_QC(
     pod5_dir_ch
         .combine(summary_ch)
