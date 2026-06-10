@@ -13,6 +13,7 @@ params.seqtagger_sif = null
 params.sample_sheet = 'data/sample_sheet.csv'
 params.region = 'data/reference/region_Alban.bed'
 params.multiplex = true
+params.summary_file = 'data/pod5/sequencing_summary.txt'
 
 /*
 * Pipeline processes
