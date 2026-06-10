@@ -54,38 +54,21 @@ process dorado_basecall {
     """
 }
 
-process dorado_summary {
-    storeDir "${workflow.launchDir}/results/demultiplexed_bams/${modif}"
-
-    input:
-    tuple val(modif), path(bam_file)
-
-    output:
-    path("${modif}_summary.tsv")
-
-    script:
-    """
-    dorado summary ${bam_file} > ${modif}_summary.tsv
-    """
-}
-
 process toullig_QC {
     storeDir "${workflow.launchDir}/results/QC"
 
     input:
-    tuple path(pod5_file), path(summary_file), path(sample_sheet)
+    tuple path(pod5_dir), path(summary_file), path(sample_sheet)
 
     output:
-    path("ONT_toulligQC.html")
+    path("QC_report.html")
 
     script:
     """
     toulligqc --report-name ONT_run \
         --sequencing-summary-source ${summary_file} \
         --pod5-source ${pod5_dir} \
-        --samplesheet ${sample_sheet} \
-        --use-aliases-for-barcodes \
-        --html-report-path ONT_toulligQC.html
+        --html-report-path QC_report.html
     """
 }
 
@@ -289,13 +272,11 @@ workflow {
 
     bam_ch = dorado_basecall(basecall_input)
 
-    summary_ch = dorado_summary(bam_ch.first())
-
     toullig_QC(
-    pod5_dir_ch
-        .combine(summary_ch)
-        .combine(Channel.fromPath(params.sample_sheet))
-)
+        pod5_dir_ch
+            .combine(bam_ch.bam)
+            .combine(Channel.fromPath(params.sample_sheet))
+    )
 
     // If multiplexing, run seqtagger to demultiplex BAMs and rename them with sample names
 if (params.multiplex) {
