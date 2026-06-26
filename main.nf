@@ -6,14 +6,14 @@ nextflow.enable.dsl=2
  */
 
 params.pod5_dir = 'data/pod5/'
-params.model = 'rna004_130bps_sup@v5.3.0'
+params.model = 'rna004_sup@v6.0.0'
 params.modif = 'pseU_2OmeU,inosine_m6A_2OmeA,m5C_2OmeC,2OmeG'
 params.reference = 'data/reference/Homo_sapiens.rRNA.fasta'
 params.seqtagger_sif = null
 params.sample_sheet = 'data/sample_sheet.csv'
 params.region = 'data/reference/region_Alban.bed'
 params.multiplex = true
-params.summary_file = 'data/pod5/sequencing_summary.txt'
+params.summary_file = 'data/pod5/sequencing_summary_PBK77343_f8441023_27ec0d94.txt'
 
 /*
 * Pipeline processes
@@ -57,6 +57,7 @@ process dorado_basecall {
 
 process toullig_QC {
     storeDir "${workflow.launchDir}/results/QC"
+    errorStrategy 'ignore'
 
     input:
     tuple path(pod5_dir), path(summary_file), path(sample_sheet)
@@ -68,6 +69,7 @@ process toullig_QC {
     """
     toulligqc --report-name ONT_run \
         --sequencing-summary-source ${summary_file} \
+        -s ${sample_sheet} \
         --pod5-source ${pod5_dir} \
         --html-report-path QC_report.html
     """
@@ -275,7 +277,7 @@ workflow {
 
     toullig_QC(
         pod5_dir_ch
-            .combine(bam_ch.bam)
+            .combine(Channel.fromPath(params.summary_file))
             .combine(Channel.fromPath(params.sample_sheet))
     )
 
