@@ -6,7 +6,7 @@ nextflow.enable.dsl=2
  */
 
 params.pod5_dir = 'data/pod5/'
-params.model = 'rna004_sup@v6.0.0'
+params.model = 'rna004_130bps_sup@v5.3.0'
 params.modif = 'pseU_2OmeU,inosine_m6A_2OmeA,m5C_2OmeC,2OmeG'
 params.reference = 'data/reference/Homo_sapiens.rRNA.fasta'
 params.seqtagger_sif = null
@@ -50,7 +50,7 @@ process dorado_basecall {
         ${pod5_dir} \
         --modified-bases ${modif} \
         --reference ${reference_file} \
-        --mm2-opts "-x map-ont -N 0 -k 13" \
+        --mm2-opts "-x map-ont -N 5 -k 13" \
         > ${modif}.bam
     """
 }
@@ -68,10 +68,12 @@ process toullig_QC {
     script:
     """
     toulligqc --report-name ONT_run \
+        --barcoding \
         --sequencing-summary-source ${summary_file} \
         -s ${sample_sheet} \
         --pod5-source ${pod5_dir} \
-        --html-report-path QC_report.html
+        --html-report-path QC_report.html \
+        --barcodes 7:39
     """
 }
 
@@ -129,7 +131,7 @@ process seqtagger_demultiplex {
 }
 
 process change_name {
-    storeDir "${workflow.launchDir}/results/demultiplexed_bams/${modif}"
+    publishDir { "${workflow.launchDir}/results/demultiplexed_bams/${modif}" }, mode: 'copy'
 
     input:
     tuple val(modif), val(sample_name), path(bam_file)
@@ -215,7 +217,6 @@ we want to label the negative calls in the single read output with the modificat
 
 process label_negative_calls {
     storeDir "${workflow.launchDir}/results/SingleReads/labeled"
-    errorStrategy 'ignore'
     
     input:
     tuple val(sample_name), val(modif), path(tsv)
