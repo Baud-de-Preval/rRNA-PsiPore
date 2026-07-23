@@ -6,7 +6,7 @@ nextflow.enable.dsl=2
  */
 
 params.pod5_dir = 'data/pod5/'
-params.model = 'rna004_130bps_sup@v5.3.0'
+params.model = 'rna004_130bps_sup@v5.2.0'
 params.modif = 'pseU_2OmeU,inosine_m6A_2OmeA,m5C_2OmeC,2OmeG'
 params.reference = 'data/reference/Homo_sapiens.rRNA.fasta'
 params.seqtagger_sif = null
@@ -55,25 +55,68 @@ process dorado_basecall {
     """
 }
 
-process toullig_QC {
-    storeDir "${workflow.launchDir}/results/QC"
+process toullig_QC_sample {
+    tag "${sample_name}_${modif}"
+    storeDir "${workflow.launchDir}/results/QC/per_sample"
     errorStrategy 'ignore'
 
     input:
-    tuple path(pod5_dir), path(summary_file), path(sample_sheet)
+    tuple val(sample_name), val(modif), path(bam), path(bai)
 
     output:
-    path("QC_report.html")
+    path("${sample_name}_${modif}_QC_report.html")
 
     script:
     """
-    toulligqc --report-name ONT_run \
-        --barcoding \
-        --sequencing-summary-source ${summary_file} \
-        -s ${sample_sheet} \
-        --pod5-source ${pod5_dir} \
-        --html-report-path QC_report.html \
-        --barcodes 7:39
+    toulligqc --report-name ${sample_name}_${modif} \
+        --bam ${bam} \
+        --html-report-path ${sample_name}_${modif}_QC_report.html
+    """
+}
+
+process merge_QC_reports {
+    publishDir "${workflow.launchDir}/results/QC", mode: 'copy'
+
+    input:
+    path report_htmls
+
+    output:
+    path("combined_QC_report.html")
+
+    script:
+    """
+    python3 - <<'EOF'
+import glob, os, base64
+
+reports = sorted(glob.glob("*_QC_report.html"))
+
+with open("combined_QC_report.html", "w") as out:
+    out.write("<!DOCTYPE html><html><head><meta charset='utf-8'><title>Combined ToulligQC report</title>")
+    out.write("<style>body{font-family:sans-serif;margin:0;}"
+              "nav{background:#222;padding:8px;position:sticky;top:0;}"
+              "nav a{color:#fff;margin-right:14px;text-decoration:none;cursor:pointer;}"
+              "nav a.active{text-decoration:underline;}"
+              "iframe{width:100%;height:92vh;border:none;display:none;}</style>")
+    out.write("<script>function showReport(id){"
+              "document.querySelectorAll('iframe').forEach(f=>f.style.display='none');"
+              "document.querySelectorAll('nav a').forEach(a=>a.classList.remove('active'));"
+              "document.getElementById(id).style.display='block';"
+              "document.getElementById('link_'+id).classList.add('active');}"
+              "</script></head><body><nav>")
+
+    for i, r in enumerate(reports):
+        name = os.path.basename(r).replace("_QC_report.html", "")
+        out.write(f'<a id="link_frame{i}" onclick="showReport(\\'frame{i}\\')">{name}</a>')
+    out.write("</nav>")
+
+    for i, r in enumerate(reports):
+        with open(r, "rb") as f:
+            b64 = base64.b64encode(f.read()).decode()
+        style = "display:block" if i == 0 else "display:none"
+        out.write(f'<iframe id="frame{i}" style="{style}" src="data:text/html;base64,{b64}"></iframe>')
+
+    out.write("</body></html>")
+EOF
     """
 }
 
@@ -276,11 +319,8 @@ workflow {
 
     bam_ch = dorado_basecall(basecall_input)
 
-    toullig_QC(
-        pod5_dir_ch
-            .combine(Channel.fromPath(params.summary_file))
-            .combine(Channel.fromPath(params.sample_sheet))
-    )
+    sample_qc_ch = toullig_QC_sample(sorted_bam_ch)
+    merge_QC_reports(sample_qc_ch.collect())
 
     // If multiplexing, run seqtagger to demultiplex BAMs and rename them with sample names
 if (params.multiplex) {
