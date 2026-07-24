@@ -319,9 +319,6 @@ workflow {
 
     bam_ch = dorado_basecall(basecall_input)
 
-    sample_qc_ch = toullig_QC_sample(sorted_bam_ch)
-    merge_QC_reports(sample_qc_ch.collect())
-
     // If multiplexing, run seqtagger to demultiplex BAMs and rename them with sample names
 if (params.multiplex) {
     sif_ch = params.seqtagger_sif ? 
@@ -365,6 +362,9 @@ if (params.multiplex) {
 } else { // If no multiplexing, simply sort and index the single BAM
     sorted_bam_ch = sort_index_bam(bam_ch.bam).sorted_bam
 }
+
+sample_qc_ch = toullig_QC_sample(sorted_bam_ch)
+merge_QC_reports(sample_qc_ch.collect())
 
 // Run per modification pileup and single read extraction, then merge results for each sample
 
