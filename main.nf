@@ -7,13 +7,13 @@ nextflow.enable.dsl=2
 
 params.pod5_dir = 'data/pod5/'
 params.model = 'rna004_130bps_sup@v5.2.0'
-params.modif = 'pseU_2OmeU,inosine_m6A_2OmeA,m5C_2OmeC,2OmeG'
+params.modif = 'inosine_m6A_2OmeA,m5C_2OmeC,pseU_2OmeU,2OmeG'
 params.reference = 'data/reference/Homo_sapiens.rRNA.fasta'
 params.seqtagger_sif = null
 params.sample_sheet = 'data/sample_sheet.csv'
 params.region = 'data/reference/region_Alban.bed'
 params.multiplex = true
-params.summary_file = 'data/pod5/sequencing_summary_PBK77343_f8441023_27ec0d94.txt'
+/*params.summary_file = 'data/pod5/sequencing_summary_PBK77343_f8441023_27ec0d94.txt'*/
 
 /*
 * Pipeline processes
@@ -128,7 +128,7 @@ process download_seqtagger_image {
     
     script:
     """
-    apptainer pull seqtagger.sif docker://lpryszcz/seqtagger:2.0a
+    apptainer pull seqtagger.sif docker://lpryszcz/seqtagger:1.0d
     """
 }
 
@@ -205,6 +205,7 @@ process sort_index_bam {
 }
 
 process pileup {
+    scratch true
     storeDir "${workflow.launchDir}/results/pileups"
     input:
     tuple val(sample_name), val(modif), path(bam), path(bai), path(reference_file)
@@ -237,6 +238,7 @@ process merge_pileups {
 }
 
 process SingleReads {
+    scratch true
     storeDir "${workflow.launchDir}/results/SingleReads/"
     input:
     tuple val(sample_name), val(modif), path(bam), path(bai), path(reference_file), path(region_file)
@@ -350,11 +352,12 @@ if (params.multiplex) {
                 def barcode = matcher[0][1]
                 def sample_name = sample_map[barcode]
                 if (sample_name) {
-                    [modif, sample_name, file]
+                    return [modif, sample_name, file]
                 }
             }
+            return null
         }
-    }
+    }.filter { it != null }
 
     renamed_bam = change_name(renamed_ch)
     sorted_bam_ch = sort_index_bam(renamed_bam).sorted_bam
