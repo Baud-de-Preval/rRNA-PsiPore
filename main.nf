@@ -7,7 +7,7 @@ nextflow.enable.dsl=2
 
 params.pod5_dir = 'data/pod5/'
 params.model = 'rna004_130bps_sup@v5.2.0'
-params.modif = 'inosine_m6A_2OmeA,m5C_2OmeC,pseU_2OmeU,2OmeG'
+params.modif = 'pseU_2OmeU,inosine_m6A_2OmeA,2OmeG,m5C_2OmeC'
 params.reference = 'data/reference/Homo_sapiens.rRNA.fasta'
 params.seqtagger_sif = null
 params.sample_sheet = 'data/sample_sheet.csv'
@@ -55,7 +55,7 @@ process dorado_basecall {
     """
 }
 
-process toullig_QC_sample {
+process nanostat_sample {
     tag "${sample_name}_${modif}"
     storeDir "${workflow.launchDir}/results/QC/per_sample"
     errorStrategy 'ignore'
@@ -64,59 +64,29 @@ process toullig_QC_sample {
     tuple val(sample_name), val(modif), path(bam), path(bai)
 
     output:
-    path("${sample_name}_${modif}_QC_report.html")
+    path("${sample_name}_${modif}_NanoStats.txt")
 
     script:
     """
-    toulligqc --report-name ${sample_name}_${modif} \
-        --bam ${bam} \
-        --html-report-path ${sample_name}_${modif}_QC_report.html
+    NanoStat --bam ${bam} \\
+        --name ${sample_name}_${modif}_NanoStats.txt \\
+        --threads ${task.cpus}
     """
 }
 
-process merge_QC_reports {
+process multiqc_report {
     publishDir "${workflow.launchDir}/results/QC", mode: 'copy'
 
     input:
-    path report_htmls
+    path nanostat_files
 
     output:
     path("combined_QC_report.html")
+    path("combined_QC_report_data")
 
     script:
     """
-    python3 - <<'EOF'
-import glob, os, base64
-
-reports = sorted(glob.glob("*_QC_report.html"))
-
-with open("combined_QC_report.html", "w") as out:
-    out.write("<!DOCTYPE html><html><head><meta charset='utf-8'><title>Combined ToulligQC report</title>")
-    out.write("<style>body{font-family:sans-serif;margin:0;}"
-              "nav{background:#222;padding:8px;position:sticky;top:0;}"
-              "nav a{color:#fff;margin-right:14px;text-decoration:none;cursor:pointer;}"
-              "nav a.active{text-decoration:underline;}"
-              "iframe{width:100%;height:92vh;border:none;display:none;}</style>")
-    out.write("<script>function showReport(id){"
-              "document.querySelectorAll('iframe').forEach(f=>f.style.display='none');"
-              "document.querySelectorAll('nav a').forEach(a=>a.classList.remove('active'));"
-              "document.getElementById(id).style.display='block';"
-              "document.getElementById('link_'+id).classList.add('active');}"
-              "</script></head><body><nav>")
-
-    for i, r in enumerate(reports):
-        name = os.path.basename(r).replace("_QC_report.html", "")
-        out.write(f'<a id="link_frame{i}" onclick="showReport(\\'frame{i}\\')">{name}</a>')
-    out.write("</nav>")
-
-    for i, r in enumerate(reports):
-        with open(r, "rb") as f:
-            b64 = base64.b64encode(f.read()).decode()
-        style = "display:block" if i == 0 else "display:none"
-        out.write(f'<iframe id="frame{i}" style="{style}" src="data:text/html;base64,{b64}"></iframe>')
-
-    out.write("</body></html>")
-EOF
+    multiqc . --force --filename combined_QC_report.html
     """
 }
 
@@ -148,6 +118,26 @@ process seqtagger_index {
         mRNA -k /opt/app/models/b96_RNA004 -r \
         -i /data/pod5/ \
         -o /data/pod5/demux    
+    """
+}
+
+process bam_tag_merging {
+    storeDir "${workflow.launchDir}/results/merged_bams"
+
+    input:
+    tuple val(label), path(bams)
+
+    output:
+    tuple val(label), path("${label}.merged.bam")
+
+    script:
+    """
+    sorted=""
+    for b in ${bams}; do
+        samtools sort -N -@ ${task.cpus} -o nsort.\$b \$b
+        sorted="\$sorted nsort.\$b"
+    done
+    ${projectDir}/script/merge_tag.py -t ${task.cpus} -o ${label}.merged.bam \$sorted
     """
 }
 
@@ -222,21 +212,6 @@ process pileup {
     """
 }
 
-process merge_pileups {
-    storeDir "${workflow.launchDir}/results/pileups"
-    
-    input:
-    tuple val(sample_name), path(bed_files)
-    
-    output:
-    tuple val(sample_name), path("${sample_name}_merged.bed")
-    
-    script:
-    """
-    cat ${bed_files} > ${sample_name}_merged.bed
-    """
-}
-
 process SingleReads {
     scratch true
     storeDir "${workflow.launchDir}/results/SingleReads/"
@@ -276,39 +251,16 @@ process label_negative_calls {
     """
 }
 
-process merge_singlereads {
-    storeDir "${workflow.launchDir}/results/SingleReads"
-    errorStrategy 'ignore'
-
-    input:
-    tuple val(sample_name), path(tsv_files)
-    
-    output:
-    tuple val(sample_name), path("${sample_name}_merged.tsv")
-    
-    script:
-    def files = tsv_files instanceof List ? tsv_files : [tsv_files]
-    def first  = files[0]
-    def all    = files.join(' ')
-
-    """
-    # Header from first file
-    head -1 ${first} > ${sample_name}_merged.tsv
-
-    # Data (no header) from all files
-    for f in ${all}; do
-        tail -n +2 \$f >> ${sample_name}_merged.tsv
-    done
-    """
-}
-
 // ===== WORKFLOW =====
 
 workflow {
     pod5_dir_ch  = Channel.fromPath(params.pod5_dir, type: 'dir')
     reference_ch = Channel.fromPath(params.reference)
-    region_ch = Channel.fromPath(params.region)
-    model_ch = dorado_model(params.model)
+    region_ch    = Channel.fromPath(params.region)
+    model_ch     = dorado_model(params.model)
+
+    // e.g. "pseU,m6A_DRACH" -> label modfications as "pseU_2OmeG" for merged BAM and downstream outputs
+    def mods_label = params.modif.split(',').collect { it.trim() }.sort(false).join('_')
 
     modif_ch = Channel.of(params.modif.split(','))
         .flatten()
@@ -321,78 +273,62 @@ workflow {
 
     bam_ch = dorado_basecall(basecall_input)
 
-    // If multiplexing, run seqtagger to demultiplex BAMs and rename them with sample names
-if (params.multiplex) {
-    sif_ch = params.seqtagger_sif ? 
-        Channel.fromPath(params.seqtagger_sif) : 
-        download_seqtagger_image()
+    // One BAM per run carrying all modification tags
+    merge_input = bam_ch.bam
+        .toSortedList { a, b -> a[0] <=> b[0] }
+        .map { items -> tuple(mods_label, items.collect { it[1] }) }
 
-    index_ch = seqtagger_index(sif_ch)
-    
-    demux_input = bam_ch.bam
-        .combine(index_ch)
-        .combine(sif_ch)
-    
-    demux_ch = seqtagger_demultiplex(demux_input)
+    merged_bam = bam_tag_merging(merge_input)
 
-    // Read sample sheet into map
-    def sample_map = [:]
-    file(params.sample_sheet).eachLine { line ->
-        if (!line.startsWith('barcode')) {
-            def parts = line.split(',')
-            sample_map[parts[0]] = parts[1]
+    if (params.multiplex) {
+        sif_ch = params.seqtagger_sif ?
+            Channel.fromPath(params.seqtagger_sif) :
+            download_seqtagger_image()
+
+        index_ch = seqtagger_index(sif_ch)
+
+        demux_input = merged_bam
+            .combine(index_ch)
+            .combine(sif_ch)
+
+        demux_ch = seqtagger_demultiplex(demux_input)
+
+        def sample_map = [:]
+        file(params.sample_sheet).eachLine { line ->
+            if (!line.startsWith('barcode')) {
+                def parts = line.split(',')
+                sample_map[parts[0]] = parts[1]
+            }
         }
+
+        renamed_ch = demux_ch.flatMap { modif, files ->
+            files.collect { file ->
+                def matcher = (file.name =~ /output\.bc_(\d+)\.bam/)
+                if (matcher) {
+                    def sample_name = sample_map[matcher[0][1]]
+                    if (sample_name) {
+                        return [modif, sample_name, file]
+                    }
+                }
+                return null
+            }
+        }.filter { it != null }
+
+        renamed_bam   = change_name(renamed_ch)
+        sorted_bam_ch = sort_index_bam(renamed_bam).sorted_bam
+
+    } else {
+        // sort_index_bam expects (modif, sample_name, bam)
+        single_ch     = merged_bam.map { label, bam -> tuple(label, 'sample', bam) }
+        sorted_bam_ch = sort_index_bam(single_ch).sorted_bam
     }
 
-    // Parse BAMs and lookup sample names in sample_sheet
-    renamed_ch = demux_ch.flatMap { modif, files ->
-        files.collect { file ->
-            def matcher = (file.name =~ /output\.bc_(\d+)\.bam/)
-            if (matcher) {
-                def barcode = matcher[0][1]
-                def sample_name = sample_map[barcode]
-                if (sample_name) {
-                    return [modif, sample_name, file]
-                }
-            }
-            return null
-        }
-    }.filter { it != null }
+    nanostat_sample(sorted_bam_ch)
+    multiqc_report(nanostat_sample.out.collect())
 
-    renamed_bam = change_name(renamed_ch)
-    sorted_bam_ch = sort_index_bam(renamed_bam).sorted_bam
+    // Multi-mod BAM -> one pileup / one extract per sample
+    pileup(sorted_bam_ch.combine(reference_ch))
 
-} else { // If no multiplexing, simply sort and index the single BAM
-    sorted_bam_ch = sort_index_bam(bam_ch.bam).sorted_bam
-}
-
-sample_qc_ch = toullig_QC_sample(sorted_bam_ch)
-merge_QC_reports(sample_qc_ch.collect())
-
-// Run per modification pileup and single read extraction, then merge results for each sample
-
-pileup_input = sorted_bam_ch.combine(reference_ch)
-pileup_result = pileup(pileup_input)
-
-merged_pileups = pileup_result
-    .groupTuple(by: 0)  // Group by sample_name
-    .map { sample_name, modifs, beds -> [sample_name, beds.flatten()] }
-
-merge_pileup_result = merge_pileups(merged_pileups)
-
-sinread_input = sorted_bam_ch.combine(reference_ch).combine(region_ch)
-sinread_result = SingleReads(sinread_input)
-
-sinread_labeled = label_negative_calls(sinread_result)
-
-merged_input_ch = sinread_labeled
-        | groupTuple(by: 0)
-        | map { sample_name, files ->
-            tuple(sample_name, files.flatten().findAll { it != null })
-        }
-        | filter { sample_name, files ->
-            files.size() > 0
-        }
-
-    merge_singlereads(merged_input_ch)
+    sinread_result = SingleReads(sorted_bam_ch.combine(reference_ch).combine(region_ch))
+    label_negative_calls(sinread_result)
 }
